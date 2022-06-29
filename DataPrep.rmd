@@ -1,0 +1,434 @@
+---
+title: "BAN 502 Final Project Data Prep"
+author: "Mathews, Chris"
+date: '2022-06-16'
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(results = 'asis',     # Can also be set at chunk level
+                      comment = NA,
+                      prompt  = FALSE,
+                      cache   = FALSE,
+                      fig.width = 12, 
+                      fig.height = 8)
+```
+
+## Load the libraries  
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(skimr)
+library(mice) #package for imputation
+#library(VIM) #visualizing missingness
+library(caret)
+library(GGally)
+library(gridExtra)
+library(corrplot)
+library(correlationfunnel)
+library(forcats)
+library(summarytools)
+```
+
+## Read the Data  
+
+Read the data and see what we are dealing with.
+
+```{r}
+ames <- read_csv("~/BAN502/CourseProject/ames_student.csv")
+```
+
+
+```{r warning=FALSE}
+summary(ames)
+#stview(summarytools::dfSummary(ames))
+```
+
+## Pre-Process Categorical Data
+
+Plenty of character variables. First we need them as factors. Then lets examine the levels to determine whether the variables are balanced or larger a single value.
+
+```{r}
+ames = ames %>% mutate_if(is.character,as_factor)
+```
+
+Generate a sorted list of factors to use for later transforms
+
+```{r}
+sort(names(which(sapply(ames, class) == "factor")))
+```
+
+```{r}
+factor_list = c("Above_Median", "Alley", "Bldg_Type", "Bsmt_Cond", "Bsmt_Exposure", "Bsmt_Qual", "BsmtFin_Type_1", "BsmtFin_Type_2", "Central_Air", "Condition_1", "Condition_2", "Electrical", "Exter_Cond", "Exter_Qual",    
+"Exterior_1st", "Exterior_2nd", "Fence", "Fireplace_Qu", "Foundation", "Functional", "Garage_Cond", "Garage_Finish", "Garage_Qual", "Garage_Type", "Heating", "Heating_QC", "House_Style", "Kitchen_Qual",   
+"Land_Contour", "Land_Slope", "Lot_Config", "Lot_Shape", "Mas_Vnr_Type", "Misc_Feature", "MS_SubClass", "MS_Zoning", "Neighborhood", "Overall_Cond", "Overall_Qual", "Paved_Drive", "Pool_QC", "Roof_Matl",
+"Roof_Style", "Sale_Condition", "Sale_Type", "Street", "Utilities")
+```
+
+Using the factor list above, combine low freqency levels into an "Other" group. Set the value relatively low, but can rerun at higher later on
+
+```{r}
+ames <- ames %>%
+  mutate(across(factor_list, fct_lump_min,min = 50,other_level = 'Other'))
+```
+
+### generate graphics for presentation
+
+```{r message=FALSE, warning=FALSE}
+ggplot(ames, aes(x=Heating,fill=Above_Median)) + geom_bar(alpha=0.7) + labs(title="Heating")
+ggsave("Heatingfct.png")
+```
+
+
+Seems that cleaning the low frequency levels have some, but a few extremely unbalanced factors remain.
+
+  * Sale_Condtion is defined as the type of sale and includes outliers like foreclosures and family sales. I would expect these types of sales to follow other patterns and should be excluded from this analysis
+  * Additionally, the Utilities variable indicates that all properties have all municipal utilities except one. Exclude this property as well.
+  * MS_SubClass levels appear to be a combination of columns, remove it
+  * Latitude and Longitude could be important in some types of analysis, but proximity to other like properties in likely covered in the Neighborhood variable, drop them.
+
+There are some that are still unbalanced(Street, Alley, Bsmt*), but might prove interesting like the Pool_QC column that indicates whether the property contains a pool. Removed the Pool_area column and will hold in reserve the remaining few categorical variables.  
+
+```{r}
+ames <- subset(ames, 
+               ames$Sale_Condition == "Normal")
+ames <- subset(ames, 
+               ames$Utilities == "AllPub")
+ames <- select(ames, -c(MS_SubClass, Latitude, Longitude, Utilities, Sale_Condition, Pool_Area))
+```
+
+### Finish Categorical Variables Pre-Processing
+
+
+## Pre-Process Numeric variables
+
+Generate a list of numeric variables
+
+```{r}
+sort(names(which(sapply(ames, class) == "numeric")))
+```
+
+```{r}
+numeric_discrete_list = c("Year_Built", "Year_Remod_Add", "BsmtFin_SF_1", "Bedroom_AbvGr", "Bsmt_Full_Bath", "Bsmt_Half_Bath", "Fireplaces", "Full_Bath", "Garage_Cars", "Half_Bath",  "Kitchen_AbvGr",  "Mo_Sold", "Pool_QC", "TotRms_AbvGrd", "Year_Sold" )
+numeric_continous_list = c("Lot_Area", "Lot_Frontage", "Mas_Vnr_Area", "Bsmt_Unf_SF", "BsmtFin_SF_2", "Total_Bsmt_SF", "First_Flr_SF","Second_Flr_SF",  "Low_Qual_Fin_SF", "Gr_Liv_Area", "Enclosed_Porch", "Garage_Area", "Misc_Val", "Open_Porch_SF", "Screen_Porch",  "Three_season_porch", "Wood_Deck_SF" )
+
+```
+
+```{r}
+numeric_discrete_list
+```
+
+```{r}
+p1 = ggplot(ames, aes(x=Garage_Cars,fill=Above_Median)) + geom_bar(alpha=0.7)
+p2 = ggplot(ames, aes(x=Half_Bath,fill=Above_Median)) + geom_bar(alpha=0.7)
+p3 = ggplot(ames, aes(x=Kitchen_AbvGr,fill=Above_Median)) + geom_bar(alpha=0.7)
+p4 = ggplot(ames, aes(x=Mo_Sold,fill=Above_Median)) + geom_bar(alpha=0.7)
+p5 = ggplot(ames, aes(x=Pool_QC,fill=Above_Median)) + geom_bar(alpha=0.7)
+p6 = ggplot(ames, aes(x=TotRms_AbvGrd,fill=Above_Median)) + geom_bar(alpha=0.7)
+p7 = ggplot(ames, aes(x=Year_Sold,fill=Above_Median)) + geom_bar(alpha=0.7)
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, ncol=2)
+```
+The above plots indicate that Kitchen_AbvGr and Pool_QC remain unbalanced and are candidates for exclusion
+
+```{r}
+ames <- select(ames, -c(Kitchen_AbvGr, Pool_QC))
+```
+
+```{r}
+p1 = ggplot(ames, aes(x=Year_Built,fill=Above_Median)) + geom_bar(alpha=0.7)
+p2 = ggplot(ames, aes(x=Year_Remod_Add,fill=Above_Median)) + geom_bar(alpha=0.7)
+p3 = ggplot(ames, aes(x=BsmtFin_SF_1,fill=Above_Median)) + geom_bar(alpha=0.7)
+p4 = ggplot(ames, aes(x=Bedroom_AbvGr,fill=Above_Median)) + geom_bar(alpha=0.7)
+p5 = ggplot(ames, aes(x=Bsmt_Full_Bath,fill=Above_Median)) + geom_bar(alpha=0.7)
+p6 = ggplot(ames, aes(x=Bsmt_Half_Bath,fill=Above_Median)) + geom_bar(alpha=0.7)
+p7 = ggplot(ames, aes(x=Fireplaces,fill=Above_Median)) + geom_bar(alpha=0.7)
+p8 = ggplot(ames, aes(x=Full_Bath,fill=Above_Median)) + geom_bar(alpha=0.7)
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, p8,  ncol=2)
+```
+
+### Generate graphics for presentation
+
+```{r}
+p1 =ggplot(ames, aes(x=Bsmt_Half_Bath,fill=Above_Median)) + geom_bar(alpha=0.7) + labs(title = "Basement Half Baths")
+ggsave("BsmtHalfBath.png")
+p2 = ggplot(ames, aes(x=TotRms_AbvGrd,fill=Above_Median)) + geom_bar(alpha=0.7) + labs(title = "Total Rooms Above Ground")
+ggsave("TotRms_AbvGrd.png")
+grid.arrange(p1, p2, ncol=2)
+```
+
+
+Bsmt_Half_Bath might need to be excluded.
+
+```{r}
+ames <- select(ames, -c(Bsmt_Half_Bath))
+```
+
+```{r}
+numeric_continous_list
+```
+
+```{r}
+p2 = ggplot(ames, aes(x = Lot_Area)) +  
+  geom_histogram(binwidth = 2000, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 200)) + 
+  theme_minimal() 
+p4 = ggplot(ames, aes(x = Lot_Frontage)) +  
+  geom_histogram(binwidth = 25, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 25)) + 
+  theme_minimal() 
+p6 = ggplot(ames, aes(x = Mas_Vnr_Area)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 20)) + 
+  theme_minimal() 
+p8 = ggplot(ames, aes(x = Bsmt_Unf_SF)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 20)) + 
+  theme_minimal() 
+grid.arrange(p2, p4, p6, p8, ncol = 2)
+```
+
+### Generate graphics for presentation
+
+```{r}
+p1 = ggplot(ames, aes(x = Lot_Area)) +  
+  geom_histogram(binwidth = 2000, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 200)) + 
+  theme_minimal()
+ggsave("Lot_Area.png")
+p2 = ggplot(ames, aes(x = Lot_Frontage)) +  
+  geom_histogram(binwidth = 25, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 25)) + 
+  theme_minimal() 
+ggsave("Lot_front.png")
+grid.arrange(p1, p2, ncol=2)
+```
+
+
+Mas_Vnr_Area is the would likely indicate no Masonary veneer and the Bsmt_Unf_Sf might indicate no basement.
+The Lot_Area is of concern and we like need to exclude the largest lots. The median value is 9525 sq ft, there are 11 properties with lot area greater than 1 acre(43560 sq ft). We will be excluding them from the analysis.
+Additionally, it is unlikely that properties sold have zero frontage and is likely keying error. We will impute the median value based on Lot_Shape and replace the zero's.
+
+```{r}
+ames <- ames %>% filter(Lot_Area <= 43560)
+```
+
+```{r}
+sprintf("For: \n") %>% cat()
+for (i in unique(ames$Lot_Shape))
+    {
+    ames_i <- ames %>% filter(Lot_Shape==i)
+    sprintf(
+            fmt = " -%s houses, the mean Lot_Frontage is %.2f and median Lot_Frontage is %.2f\n",
+            i, mean(ames_i$Lot_Frontage, na.rm=TRUE), median(ames_i$Lot_Frontage, na.rm=TRUE)
+            ) %>% cat()
+}
+```
+
+```{r}
+ames <- ames %>% 
+  group_by(Lot_Shape) %>% 
+  mutate(Lot_Frontage = ifelse(Lot_Frontage == 0, 
+                            median(Lot_Frontage, na.rm = TRUE), 
+                            Lot_Frontage))
+```
+
+```{r}
+p2 = ggplot(ames, aes(x = Lot_Area)) +  
+  geom_histogram(binwidth = 2000, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 200)) + 
+  theme_minimal() 
+p4 = ggplot(ames, aes(x = Lot_Frontage)) +  
+  geom_histogram(binwidth = 25, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 25)) + 
+  theme_minimal() 
+p6 = ggplot(ames, aes(x = Mas_Vnr_Area)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 20)) + 
+  theme_minimal() 
+p8 = ggplot(ames, aes(x = Bsmt_Unf_SF)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 20)) + 
+  theme_minimal() 
+grid.arrange(p2, p4, p6, p8, ncol = 2)
+```
+### Generate a graphic for presentation
+
+```{r}
+ggplot(ames, aes(x = Mas_Vnr_Area)) +  
+  geom_histogram(binwidth = 50, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 2000, by = 40)) + 
+  theme_minimal()
+ggsave("Mas_Vnr_Area.png")
+```
+
+
+Mas_Vnr_Area and Bsmt_Unf_Sf should be converted to binary values indicating whether Masonary Veneer and Basement is present for the property
+
+```{r}
+ames$Mas_Vnr_Present <- factor(ifelse(ames$Mas_Vnr_Area== 0,"No","Yes"))
+ggplot(ames, aes(x=Mas_Vnr_Present,fill=Above_Median)) + geom_bar(alpha=0.7)
+ames <- select(ames, -c(Mas_Vnr_Area))
+```
+
+```{r}
+ames$Bsmt_Present <- factor(ifelse(ames$Bsmt_Unf_SF== 0,"No","Yes"))
+ggplot(ames, aes(x=Bsmt_Present,fill=Above_Median)) + geom_bar(alpha=0.7)
+ames <- select(ames, -c(Bsmt_Unf_SF))
+```
+
+```{r}
+numeric_continous_list
+```
+
+```{r}
+p2 = ggplot(ames, aes(x = Wood_Deck_SF)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 200)) + 
+  theme_minimal() 
+grid.arrange(p2, ncol = 2)
+```
+
+Likely need to convert to binary Yes for Wood Deck present and No for No Deck.
+
+```{r}
+ames$Wood_Deck <- factor(ifelse(ames$Wood_Deck_SF== 0,"No","Yes"))
+ggplot(ames, aes(x=Wood_Deck,fill=Above_Median)) + geom_bar(alpha=0.7)
+ames <- select(ames, -c(Wood_Deck_SF))
+```
+
+```{r}
+p2 = ggplot(ames, aes(x = Misc_Val)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 200)) + 
+  theme_minimal() 
+p4 = ggplot(ames, aes(x = Open_Porch_SF)) +  
+  geom_histogram(binwidth = 25, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 25)) + 
+  theme_minimal() 
+p6 = ggplot(ames, aes(x = Screen_Porch)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 20)) + 
+  theme_minimal() 
+p8 = ggplot(ames, aes(x = Three_season_porch)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 20)) + 
+  theme_minimal() 
+grid.arrange(p2, p4, p6, p8, ncol = 2)
+```
+
+All the above variables can likley be excluded or converted to binary state.
+
+```{r}
+ames$Misc_Val_fct <- factor(ifelse(ames$Misc_Val== 0,"No","Yes"))
+ames$Open_Porch_fct <- factor(ifelse(ames$Open_Porch_SF== 0,"No","Yes"))
+ames$Screen_Porch_fct <- factor(ifelse(ames$Screen_Porch== 0,"No","Yes"))
+ames$Three_season_porch_fct <- factor(ifelse(ames$Three_season_porch== 0,"No","Yes"))
+
+p1 = ggplot(ames, aes(x=Misc_Val_fct,fill=Above_Median)) + geom_bar(alpha=0.7)
+p2 = ggplot(ames, aes(x=Open_Porch_fct,fill=Above_Median)) + geom_bar(alpha=0.7)
+p3 = ggplot(ames, aes(x=Screen_Porch_fct,fill=Above_Median)) + geom_bar(alpha=0.7)
+p4 = ggplot(ames, aes(x=Three_season_porch_fct,fill=Above_Median)) + geom_bar(alpha=0.7)
+grid.arrange(p1, p2, p3, p4, ncol=2)
+
+ames <- select(ames, -c(Misc_Val, Open_Porch_SF, Screen_Porch, Three_season_porch))
+```
+Even converting to binary factor for all but Open Porch appears lopsided
+
+```{r}
+p2 = ggplot(ames, aes(x = Low_Qual_Fin_SF)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 200)) + 
+  theme_minimal() 
+p4 = ggplot(ames, aes(x = Gr_Liv_Area)) +  
+  geom_histogram(binwidth = 25, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 25)) + 
+  theme_minimal() 
+p6 = ggplot(ames, aes(x = Enclosed_Porch)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 20)) + 
+  theme_minimal() 
+p8 = ggplot(ames, aes(x = Garage_Area)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 20)) + 
+  theme_minimal() 
+grid.arrange(p2, p4, p6, p8, ncol = 2)
+```
+
+Low_Qual_Fin_SF and Enclosed_Porch are likely candidates for exclusion or conversion to binary variables
+
+```{r}
+ames$Low_Qual_Fin_fct <- factor(ifelse(ames$Low_Qual_Fin_SF== 0,"No","Yes"))
+ames$Enclosed_Porch_fct <- factor(ifelse(ames$Enclosed_Porch== 0,"No","Yes"))
+
+p1 = ggplot(ames, aes(x=Misc_Val_fct,fill=Above_Median)) + geom_bar(alpha=0.7)
+p2 = ggplot(ames, aes(x=Open_Porch_fct,fill=Above_Median)) + geom_bar(alpha=0.7)
+grid.arrange(p1, p2, ncol=2)
+
+ames <- select(ames, -c(Low_Qual_Fin_SF, Enclosed_Porch))
+```
+Misc_Val_fct can still likely be removed.
+
+```{r}
+p2 = ggplot(ames, aes(x = BsmtFin_SF_2)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 200)) + 
+  theme_minimal() 
+p4 = ggplot(ames, aes(x = Total_Bsmt_SF)) +  
+  geom_histogram(binwidth = 25, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 25)) + 
+  theme_minimal() 
+p6 = ggplot(ames, aes(x = First_Flr_SF)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 20)) + 
+  theme_minimal() 
+p8 = ggplot(ames, aes(x = Second_Flr_SF)) +  
+  geom_histogram(binwidth = 20, fill = "lightsalmon2", color = "black") +
+  scale_x_continuous(labels = comma, breaks = seq(0, 3500, by = 20)) + 
+  theme_minimal() 
+grid.arrange(p2, p4, p6, p8, ncol = 2)
+```
+BsmtFin_SF_2 and Second_Flr_SF are both like candidates for exclusion.
+
+```{r}
+ames$BsmtFin_fct <- factor(ifelse(ames$BsmtFin_SF_2== 0,"No","Yes"))
+ames$Second_Flr_fct <- factor(ifelse(ames$Second_Flr_SF== 0,"No","Yes"))
+
+p1 = ggplot(ames, aes(x=BsmtFin_fct,fill=Above_Median)) + geom_bar(alpha=0.7)
+p2 = ggplot(ames, aes(x=Second_Flr_fct,fill=Above_Median)) + geom_bar(alpha=0.7)
+grid.arrange(p1, p2, ncol=2)
+
+ames <- select(ames, -c(BsmtFin_SF_2, Second_Flr_SF))
+```
+
+```{r}
+ggplot(ames, aes(x = Year_Sold, fill = Above_Median)) +
+  geom_bar(position = "dodge", alpha=0.65) +
+  labs(title="Counts of Homes Sold By Year")
+ggsave("CountByYearSold.png")
+```
+
+```{r}
+ames_binarized <- ames %>%
+    binarize(n_bins = 4, thresh_infreq = 0.01, name_infreq = "Other_Bin", one_hot=TRUE)
+sort(colnames(ames_binarized))
+```
+
+```{r fig.width=12, fig.height=16}
+ames_correlated <- ames_binarized %>%
+    correlate(target = Above_Median__Yes)
+ames_correlated %>%
+    plot_correlation_funnel(interactive=FALSE)
+```
+```{r warning=FALSE}
+ames_final <- ames %>% select(c(Above_Median, Full_Bath, Kitchen_Qual, Bsmt_Qual, Heating_QC, Exter_Qual, Foundation, Fireplaces, Garage_Cars,  Open_Porch_fct, BsmtFin_Type_1, Gr_Liv_Area, MS_Zoning, Lot_Shape, Lot_Frontage, Lot_Area, Year_Remod_Add, Year_Built ))
+saveRDS(ames_final, "./AMESFINAL.RDS")
+write.csv(ames_final, "./amesfinal.csv")
+
+
+summary(ames_final)
+#stview(dfSummary(ames_final))
+```
+

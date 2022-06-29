@@ -1,0 +1,257 @@
+---
+title: "Decision Tree"
+author: "Mathews, Chris"
+date: '2022-06-23'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(e1071)
+library(ROCR)
+library(summarytools)
+library(rpart) #for classification trees
+library(rpart.plot) #for plotting trees
+library(RColorBrewer) #better visualization of classification trees
+library(rattle) #better visualization of classification trees
+library(caret)
+```
+
+```{r}
+ames <- readRDS("AMESFINAL.RDS")
+#ames <- ames %>% filter(Kitchen_Qual != "Other") %>% filter(Bsmt_Qual != "Other")
+```
+
+
+Now we'll split the data.  
+```{r}
+set.seed(123) 
+ames_split = initial_split(ames, prop = 0.7, strata = Above_Median) #70% in training
+train = training(ames_split) 
+test = testing(ames_split)
+```
+
+Let's build a classification tree.  
+```{r}
+ames_recipe = recipe(Above_Median ~., train) %>%
+  step_dummy(all_nominal(),-all_outcomes())
+
+tree_model = decision_tree() %>% 
+  set_engine("rpart", model = TRUE) %>% #don't forget the model = TRUE flag
+  set_mode("classification")
+
+ames_wflow = 
+  workflow() %>% 
+  add_model(tree_model) %>% 
+  add_recipe(ames_recipe)
+
+ames_fit = fit(ames_wflow, train)
+```
+
+```{r}
+tree = ames_fit %>% 
+  pull_workflow_fit() %>% 
+  pluck("fit")
+
+fancyRpartPlot(tree) 
+```
+```{r}
+tree$variable.importance
+vip(tree)
+```
+
+
+
+
+Look at the "rpart" complexity parameter "cp".    
+```{r}
+ames_fit$fit$fit$fit$cptable
+```
+
+Create our folds  
+```{r}
+set.seed(234)
+folds = vfold_cv(train, v = 5)
+```
+
+
+```{r}
+ames_recipe = recipe(Above_Median ~., train) %>%
+  step_dummy(all_nominal(),-all_outcomes())
+
+tree_model = decision_tree(cost_complexity = tune()) %>% 
+  set_engine("rpart", model = TRUE) %>% #don't forget the model = TRUE flag
+  set_mode("classification")
+
+tree_grid = grid_regular(cost_complexity(),
+                          levels = 25) #try 25 sensible values for cp
+
+ames_wflow = 
+  workflow() %>% 
+  add_model(tree_model) %>% 
+  add_recipe(ames_recipe)
+
+tree_res = 
+  ames_wflow %>% 
+  tune_grid(
+    resamples = folds,
+    grid = tree_grid
+    )
+
+tree_res
+```
+
+```{r}
+tree_res %>%
+  collect_metrics() %>%
+  ggplot(aes(cost_complexity, mean)) +
+  geom_line(size = 1.5, alpha = 0.6) +
+  geom_point(size = 2) +
+  facet_wrap(~ .metric, scales = "free", nrow = 2) 
+```
+
+```{r}
+best_tree = tree_res %>%
+  select_best("accuracy")
+
+best_tree
+```
+
+```{r}
+final_wf = 
+  ames_wflow %>% 
+  finalize_workflow(best_tree)
+```
+
+```{r}
+final_fit = fit(final_wf, train)
+
+tree = final_fit %>% 
+  pull_workflow_fit() %>% 
+  pluck("fit")
+
+fancyRpartPlot(tree, tweak = 1.5) 
+
+```
+```{r}
+vip(tree)
+saveRDS(tree, "./dt_ames_final_tree.rds")
+```
+
+
+
+Predictions on training set  
+```{r}
+treepred = predict(final_fit, train, type = "class")
+head(treepred)
+```
+
+Caret confusion matrix and accuracy, etc. calcs  
+```{r}
+confusionMatrix(treepred$.pred_class,train$Above_Median,positive="Yes") #predictions first then actual
+```
+
+Predictions on testing set  
+```{r}
+treepred_test = predict(final_fit, test, type = "class")
+head(treepred_test)
+```
+
+Caret confusion matrix and accuracy, etc. calcs  
+```{r}
+confusionMatrix(treepred_test$.pred_class,test$Above_Median,positive="Yes") #predictions first then actual
+```
+
+```{r}
+ames_recipe = recipe(Above_Median ~., train) %>% 
+  step_dummy(all_nominal(),-all_outcomes())
+
+tree_model = decision_tree(cost_complexity = tune()) %>% 
+  set_engine("rpart", model = TRUE) %>% #don't forget the model = TRUE flag
+  set_mode("classification")
+
+tree_grid = expand.grid(cost_complexity = seq(0.001,0.01,by=0.001))
+
+ames_wflow = 
+  workflow() %>% 
+  add_model(tree_model) %>% 
+  add_recipe(ames_recipe)
+
+tree_res = 
+  ames_wflow %>% 
+  tune_grid(
+    resamples = folds,
+    grid = tree_grid
+    )
+
+tree_res
+```
+
+```{r}
+tree_res %>%
+  collect_metrics() %>%
+  ggplot(aes(cost_complexity, mean)) +
+  geom_line(size = 1.5, alpha = 0.6) +
+  geom_point(size = 2) +
+  facet_wrap(~ .metric, scales = "free", nrow = 2) 
+```
+
+```{r}
+best_tree = tree_res %>%
+  select_best("accuracy")
+
+best_tree
+```
+
+```{r}
+final_wf = 
+  ames_wflow %>% 
+  finalize_workflow(best_tree)
+```
+
+```{r}
+final_fit = fit(final_wf, train)
+
+tree = final_fit %>% 
+  pull_workflow_fit() %>% 
+  pluck("fit")
+
+fancyRpartPlot(tree, tweak = 1.5) 
+
+```
+Predictions on training set  
+```{r}
+treepred = predict(final_fit, train, type = "class")
+head(treepred)
+```
+
+Caret confusion matrix and accuracy, etc. calcs  
+```{r}
+confusionMatrix(treepred$.pred_class,train$Above_Median,positive="Yes") #predictions first then actual
+```
+
+Predictions on testing set  
+```{r}
+treepred_test = predict(final_fit, test, type = "class")
+head(treepred_test)
+```
+
+Caret confusion matrix and accuracy, etc. calcs  
+```{r}
+confusionMatrix(treepred_test$.pred_class,test$Above_Median,positive="Yes") #predictions first then actual
+```
+
+```{r}
+saveRDS(final_fit, "./classtree_ames.rds")
+```
+
+```{r}
+library(vip)
+vip(final_fit$fit)
+```
+

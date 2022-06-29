@@ -1,0 +1,124 @@
+---
+title: "Ames Findings"
+author: "Chris Mathews"
+date: '2022-06-27'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(caret)
+library(mice)
+library(VIM)
+library(ranger)
+library(RColorBrewer)
+library(rpart)
+library(rattle)
+library(e1071)
+library(xgboost)
+library(usemodels)
+library(nnet) #our neural network package
+library(stacks)
+library(vip)
+```
+
+```{r}
+classtree_ames = readRDS("./dt_ames_final_tree.rds")
+logreg_ames = readRDS("./logreg_ames.rds")
+randfor_ames = readRDS("./randfor_ames.rds")
+xgb_ames = readRDS("./xgb_ames.rds")
+stacked_ames = readRDS("./stacked_ames.rds")
+```
+
+```{r}
+importance_mod = extract_fit_parsnip(logreg_ames)
+p1 = vip(importance_mod$fit, num_features = 15, geom = "point", horizontal = TRUE, 
+    aesthetics = list(color = "red", shape = 17, size = 4)) +
+  theme_light() + ggtitle("Feature Importance - Logistic Regression")
+```
+
+```{r}
+importance_mod = extract_fit_parsnip(xgb_ames)
+p2 =  vip(importance_mod$fit, num_features = 15, geom = "point", horizontal = TRUE, 
+    aesthetics = list(color = "red", shape = 17, size = 4)) +
+  theme_light() + ggtitle("Feature Importance - XGBoost")
+```
+
+```{r}
+#importance_mod = extract_fit_parsnip(classtree_ames$fit)
+p3 = randfor_ames %>% pull_workflow_fit() %>% 
+ vip(num_features = 15, geom = "point", horizontal = TRUE, 
+    aesthetics = list(color = "red", shape = 17, size = 4)) +
+  theme_light() + ggtitle("Feature Importance - Random Forest")
+
+```
+```{r}
+p4 = vip(classtree_ames, num_features = 15, geom = "point", horizontal = TRUE, 
+    aesthetics = list(color = "red", shape = 17, size = 4)) +
+  theme_light() + ggtitle("Feature Importance - Classification Tree")
+```
+
+```{r fig.height=8, fig.width=16}
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r}
+ames <- readRDS("AMESFINAL.RDS")
+#ames <- ames %>% filter(Kitchen_Qual != "Other") %>% filter(Bsmt_Qual != "Other")
+ames <- tibble::rowid_to_column(ames, "index")
+```
+
+```{r}
+ames_bmst_test <- ames 
+ames_sq_ft <- ames
+```
+
+```{r}
+ames_bmst_test %>% filter(Above_Median == "No" & BsmtFin_Type_1 == "Unf")
+```
+Row 103
+
+```{r}
+ames_sq_ft %>% filter(Above_Median == "No" & Gr_Liv_Area > 1500)
+```
+
+Row 122
+
+```{r}
+library(usemodels) #new package :)
+library(DALEXtra) #new package
+shap = explain_tidymodels(ames_blend, train %>% select(-Above_Median), y = train$Above_Median == "Yes")
+```
+
+```{r}
+#isolate a passenger in row 5, a male, let's call him "joe"
+bsmt = ames[103,]
+bsmt
+```
+
+```{r}
+predict(ames_blend, bsmt)
+```
+
+
+```{r}
+predict(shap, bsmt)
+```
+
+```{r}
+set.seed(123)
+shap_bsmt = predict_parts(explainer = shap, 
+                      new_observation = bsmt, 
+                                 type = "shap",
+                                    B = 25) #number of random orderings of the predictors
+```
+
+```{r}
+plot(shap_bsmt)
+```
+

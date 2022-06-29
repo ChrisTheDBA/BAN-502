@@ -1,0 +1,192 @@
+---
+title: "Random Forests"
+author: "Mathews, Chris"
+date: '2022-06-23'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+library(tidyverse)
+library(tidymodels)
+library(mice) #package for imputation
+library(VIM) #visualizing missingness
+library(ranger) #for random forests
+library(randomForest) #also for random forests
+library(caret)
+library(skimr)
+library(GGally)
+library(gridExtra)
+library(vip) #variable importance
+```
+
+```{r}
+ames <- readRDS("AMESFINAL.RDS")
+#ames <- ames %>% filter(Kitchen_Qual != "Other") %>% filter(Bsmt_Qual != "Other")
+```
+
+Now we'll split the data.  
+```{r}
+set.seed(123) 
+ames_split = initial_split(ames, prop = 0.7, strata = Above_Median) #70% in training
+train = training(ames_split)
+test = testing(ames_split)
+```
+
+Set up our folds for cross-validation  
+```{r}
+set.seed(123)
+rf_folds = vfold_cv(train, v = 5)
+```
+
+Random forest with an R-defined tuning grid (this model took about 5 minutes to run)
+```{r}
+ames_recipe = recipe(Above_Median ~., train) %>%
+  step_dummy(all_nominal(), -all_outcomes())
+
+rf_model = rand_forest(mtry = tune(), min_n = tune(), trees = 100) %>% #add tuning of mtry and min_n parameters
+  #setting trees to 100 here should also speed things up a bit, but more trees might be better
+  set_engine("ranger", importance = "permutation") %>% #added importance metric
+  set_mode("classification")
+
+ames_wflow = 
+  workflow() %>% 
+  add_model(rf_model) %>% 
+  add_recipe(ames_recipe)
+
+set.seed(123)
+rf_res = tune_grid(
+  ames_wflow,
+  resamples = rf_folds,
+  grid = 20 #try 20 different combinations of the random forest tuning parameters
+)
+```
+
+Look at parameter performance (borrowed from https://juliasilge.com/blog/sf-trees-random-tuning/)
+```{r}
+rf_res %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>%
+  select(mean, min_n, mtry) %>%
+  pivot_longer(min_n:mtry,
+    values_to = "value",
+    names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "Accuracy")
+```
+
+Refining the parameters  
+```{r}
+ames_recipe = recipe(Above_Median ~., train) %>%
+  step_dummy(all_nominal(), -all_outcomes())
+
+rf_model = rand_forest(mtry = tune(), min_n = tune(), trees = 100) %>% #add tuning of mtry and min_n parameters
+  #setting trees to 100 here should also speed things up a bit, but more trees might be better
+  set_engine("ranger", importance = "permutation") %>% #added importance metric
+  set_mode("classification")
+
+ames_wflow = 
+  workflow() %>% 
+  add_model(rf_model) %>% 
+  add_recipe(ames_recipe)
+
+rf_grid = grid_regular(
+  mtry(range = c(3, 10)), #these values determined through significant trial and error
+  min_n(range = c(20, 70)), #these values determined through significant trial and error
+  levels = 5
+)
+
+set.seed(123)
+rf_res_tuned = tune_grid(
+  ames_wflow,
+  resamples = rf_folds,
+  grid = rf_grid #use the tuning grid
+)
+```
+
+
+```{r}
+rf_res_tuned %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>%
+  select(mean, min_n, mtry) %>%
+  pivot_longer(min_n:mtry,
+    values_to = "value",
+    names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "Accuracy")
+```
+
+An alternate view of the parameters  
+```{r}
+rf_res_tuned %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>%
+  mutate(min_n = factor(min_n)) %>%
+  ggplot(aes(mtry, mean, color = min_n)) +
+  geom_line(alpha = 0.5, size = 1.5) +
+  geom_point() +
+  labs(y = "Accuracy")
+```
+
+```{r}
+best_rf = select_best(rf_res_tuned, "accuracy")
+
+final_rf = finalize_workflow(
+  ames_wflow,
+  best_rf
+)
+
+final_rf
+```
+
+
+```{r}
+vip(final_rf)
+```
+
+
+```{r}
+#fit the finalized workflow to our training data
+final_rf_fit = fit(final_rf, train)
+```
+
+Check out variable importance
+```{r}
+final_rf_fit %>% pull_workflow_fit() %>% vip(geom = "col")
+saveRDS(final_rf_fit, "./randfor_ames.rds")
+```
+
+Predictions  
+```{r}
+trainpredrf = predict(final_rf_fit, train)
+head(trainpredrf)
+```
+
+Confusion matrix
+```{r}
+confusionMatrix(trainpredrf$.pred_class, train$Above_Median, 
+                positive = "Yes")
+```
+
+Predictions on test
+```{r}
+testpredrf = predict(final_rf_fit, test)
+head(testpredrf)
+confusionMatrix(testpredrf$.pred_class, test$Above_Median, 
+                positive = "Yes")
+```
+
+```{r}
+saveRDS(final_rf, "./randforest_ames.rds")
+```
+

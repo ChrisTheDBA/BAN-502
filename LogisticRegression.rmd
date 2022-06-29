@@ -1,0 +1,221 @@
+---
+title: "Analysis"
+author: "Mathews, Chris"
+date: '2022-06-20'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(e1071)
+library(ROCR)
+library(summarytools)
+library
+library(RColorBrewer)
+library(rattle)
+library(caret)
+library(e1071)
+library(usemodels) #new package :)
+library(DALEXtra) #new package
+library(vip) #variable importance
+
+```
+
+```{r}
+ames <- readRDS("AMESFINAL.RDS")
+#ames <- ames %>% filter(Kitchen_Qual != "Other") %>% filter(Bsmt_Qual != "Other")
+```
+
+```{r}
+summary(ames)
+```
+```{r}
+levels(ames$Above_Median)
+```
+```{r}
+ames$Above_Median <- relevel(ames$Above_Median, ref = "Yes")
+levels(ames$Above_Median)
+```
+
+
+Now we'll split the data.  
+```{r}
+  set.seed(123) 
+  ames_split = initial_split(ames, prop = 0.70, strata = Above_Median)
+  train = training(ames_split)
+  test = testing(ames_split)
+```
+
+```{r}
+ames_model = 
+  logistic_reg() %>% #note the use of logistic_reg
+  set_engine("glm") #standard logistic regression engine is glm.
+
+ames_recipe = recipe(Above_Median ~ ., train) %>%
+  step_dummy(all_nominal(), -all_outcomes())%>% #exclude the response variable from being dummy converted  
+  step_zv(all_predictors()) %>%
+  step_nzv(all_predictors())
+
+logreg_wf = workflow() %>%
+  add_recipe(ames_recipe) %>% 
+  add_model(ames_model)
+
+ames_fit = fit(logreg_wf, train)
+```
+
+```{r}
+summary(ames_fit$fit$fit$fit)
+```
+
+```{r}
+predictions = predict(ames_fit, train, type="prob")[1]
+predictions
+```
+
+
+
+```{r}
+#Change this next line to the names of your predictions and the response variable in the training data frame
+ROCRpred = prediction(predictions, train$Above_Median) 
+
+###You shouldn't need to ever change the next two lines:
+ROCRperf = performance(ROCRpred, "tpr", "fpr")
+plot(ROCRperf, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7))
+```
+```{r}
+as.numeric(performance(ROCRpred, "auc")@y.values)
+```
+
+
+```{r}
+#Determine threshold to balance sensitivity and specificity
+#DO NOT modify this code
+opt.cut = function(perf, pred){
+    cut.ind = mapply(FUN=function(x, y, p){
+        d = (x - 0)^2 + (y-1)^2
+        ind = which(d == min(d))
+        c(sensitivity = y[[ind]], specificity = 1-x[[ind]], 
+            cutoff = p[[ind]])
+    }, perf@x.values, perf@y.values, pred@cutoffs)
+}
+print(opt.cut(ROCRperf, ROCRpred))
+```
+Predictions on training set  
+```{r}
+treepred = predict(ames_fit, train, type = "class")
+head(treepred)
+```
+
+Caret confusion matrix and accuracy, etc. calcs  
+```{r}
+confusionMatrix(treepred$.pred_class,train$Above_Median,positive="Yes") #predictions first then actual
+```
+
+Predictions on training set  
+```{r}
+treepred = predict(ames_fit, test, type = "class")
+head(treepred)
+```
+
+Caret confusion matrix and accuracy, etc. calcs  
+```{r}
+confusionMatrix(treepred$.pred_class,test$Above_Median,positive="Yes") #predictions first then actual
+```
+
+Original Cusfusion matrix, manually calculated
+
+
+Test thresholds to evaluate accuracy  
+```{r}
+#confusion matrix
+#The "No" and "Yes" represent the actual values
+#The "FALSE" and "TRUE" represent our predicted values
+t1 = table(train$Above_Median,predictions >0.4575203)
+t1
+```
+Calculate accuracy  
+```{r}
+(t1[2,1]+t1[1,2])/nrow(train)
+```
+
+```{r}
+predictions = predict(ames_fit, new_data = test, type="prob")[1]
+predictions
+```
+
+```{r}
+#Change this next line to the names of your predictions and the response variable in the training data frame
+ROCRpred = prediction(predictions, test$Above_Median) 
+
+###You shouldn't need to ever change the next two lines:
+ROCRperf = performance(ROCRpred, "tpr", "fpr")
+plot(ROCRperf, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7))
+```
+```{r}
+as.numeric(performance(ROCRpred, "auc")@y.values)
+```
+
+
+```{r}
+#Determine threshold to balance sensitivity and specificity
+#DO NOT modify this code
+opt.cut = function(perf, pred){
+    cut.ind = mapply(FUN=function(x, y, p){
+        d = (x - 0)^2 + (y-1)^2
+        ind = which(d == min(d))
+        c(sensitivity = y[[ind]], specificity = 1-x[[ind]], 
+            cutoff = p[[ind]])
+    }, perf@x.values, perf@y.values, pred@cutoffs)
+}
+print(opt.cut(ROCRperf, ROCRpred))
+```
+Test thresholds to evaluate accuracy  
+```{r}
+#confusion matrix
+#The "No" and "Yes" represent the actual values
+#The "FALSE" and "TRUE" represent our predicted values
+t1 = table(test$Above_Median,predictions >0.5968995)
+t1
+```
+Calculate accuracy  
+```{r}
+(t1[2,1]+t1[1,2])/nrow(test)
+```
+
+
+Let's take a look at variable importance before proceeding to SHAP values.
+We first extract the fit and then feed it to the "vip" function.  
+```{r}
+importance_mod = extract_fit_parsnip(ames_fit)
+saveRDS(importance_mod, "./logreg_importance.rds")
+vip(importance_mod$fit)
+```
+
+Predictions  
+```{r}
+trainpredrf = predict(ames_fit, train)
+head(trainpredrf)
+```
+
+Confusion matrix
+```{r}
+confusionMatrix(trainpredrf$.pred_class, train$Above_Median, 
+                positive = "Yes")
+```
+Predictions on test
+```{r}
+testpredrf = predict(ames_fit, test)
+head(testpredrf)
+confusionMatrix(testpredrf$.pred_class, test$Above_Median, 
+                positive = "Yes")
+```
+```{r}
+saveRDS(ames_fit, "./logreg_ames.rds")
+
+```
+
